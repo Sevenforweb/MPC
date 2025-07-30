@@ -3,7 +3,7 @@
 We propose a fast and effective point cloud human pose estimation network, which presents a new idea for human pose estimation. Specifically, by introducing the mamba architecture, we have obtained an MPC network framework that is slightly more accurate than the transformer architecture but with a much faster training speed than transformer. At the same time, we also propose a spatio-temporal coupled heatmap decoder, which can couple spatio-temporal information during the decoding process and improve the model's robustness and spatial perception ability.
 
 ## MPC Framework
-
+![框架](htps://t5.picb.cc/2025/07/30/noazoG.jpeg)
 ## Environment
 
 1. Create a conda environment:
