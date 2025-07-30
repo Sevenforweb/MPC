@@ -4,7 +4,7 @@ We propose a fast and effective point cloud human pose estimation network, which
 
 ## MPC Framework
 
-### Environment
+## Environment
 
 1. Create a conda environment:
 
@@ -22,7 +22,7 @@ We propose a fast and effective point cloud human pose estimation network, which
    accelerate config
    ```
 
-### Dataset
+## Dataset
 
 1. **Sloper4d and Lidarhuman26m**
    Please download the Sloper4d and Lidarhuman26m datasets from http://www.lidarhumanmotion.net/data-sloper4d/ and http://www.lidarhumanmotion.net/lidarcap/. Then unzip the dataset to the `./datasets` directory.
@@ -55,7 +55,7 @@ We propose a fast and effective point cloud human pose estimation network, which
 
 4. Please check the hyperparameter settings of the relevant files under `./config` and change the necessary paths or names to your actual paths or names.
 
-### Testing
+## Testing
 
 The pre-trained model can be found here:
 Please download and place it in:
@@ -71,7 +71,7 @@ accelerate launch main.py configs/sloper4d-finetune-MPC.py --test \
 --ckpt work_dir/sloper4d-finetune-MPC/checkpoints/checkpoint_0/model.safetensors
 ```
 
-### Training
+## Training
 
 Our model needs to go through a pre-training stage:
 
@@ -86,7 +86,7 @@ accelerate launch main.py configs/sloper4dfinetune-MPC.py \
 --options model.pretrained=work_dir/synpretrain-MPC/checkpoints/checkpoint_0/model.safetensors
 ```
 
-### Acknowledgements
+## Acknowledgements
 
 We would like to thank the following open-source projects for inspiring our work and ideas:
 
