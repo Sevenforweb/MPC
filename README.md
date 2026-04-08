@@ -1,5 +1,5 @@
 Notice: The full usage method of this code repository will be edited and uploaded after acceptance.
-# MPC-Mamba: Multi-Purpose Compact Mamba for 3D Human Pose Estimation and State Space Modeling
+# Bidirectional Spatial-Modulated Mamba Network for LiDAR-based 3D Human Pose Estimation
 
 <div align="center">
 
