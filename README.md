@@ -1,4 +1,4 @@
-# MPC: LiDAR 3D Human Pose Measurement with Spatial-Modulated Bidirectional SSMs
+# Compensating Distance-Dependent Sparsity in LiDAR Human Pose Measurement via Bidirectional State Space Models
 
 This repository implements the model-side pipeline described in the manuscript:
 
