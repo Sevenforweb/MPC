@@ -116,7 +116,7 @@ Run the complete example:
 
 ```powershell
 $env:PYTHONPATH = (Get-Location).Path
-python examplesun_mpc_model.py
+python examples/run_mpc_model.py
 ```
 
 ## Input and Coordinate Contract
