@@ -40,7 +40,7 @@ class MPCCalibrationLoss(nn.Module):
 
     def _connectivity_loss(self, predicted: Tensor, target: Tensor) -> Tensor:
         if not self.skeleton_edges:
-            return predicted.new_zeros(())
+            return predicted.sum() * 0.0
         predicted_bones = torch.stack([predicted[:, end] - predicted[:, start] for start, end in self.skeleton_edges], dim=1)
         target_bones = torch.stack([target[:, end] - target[:, start] for start, end in self.skeleton_edges], dim=1)
         length_loss = F.smooth_l1_loss(predicted_bones.norm(dim=-1), target_bones.norm(dim=-1))
@@ -64,12 +64,15 @@ class MPCCalibrationLoss(nn.Module):
         )
         coordinate = F.smooth_l1_loss(output.coordinates, target_joints)
         connectivity = self._connectivity_loss(output.coordinates, target_joints)
-        foreground = output.coordinates.new_zeros(())
+        foreground = output.coordinates.sum() * 0.0
         if point_foreground is not None:
-            foreground = F.binary_cross_entropy_with_logits(
+            point_losses = F.binary_cross_entropy_with_logits(
                 output.point_foreground_logits,
                 point_foreground.to(output.point_foreground_logits.dtype),
+                reduction="none",
             )
+            valid_points = output.point_mask.to(point_losses.dtype)
+            foreground = (point_losses * valid_points).sum() / valid_points.sum().clamp_min(1.0)
         correction = output.correction.square().mean()
         pretrain_total = self.connectivity_weight * connectivity + self.foreground_weight * foreground
         finetune_total = self.heatmap_weight * heatmap_kl + self.coordinate_weight * coordinate + self.correction_weight * correction
