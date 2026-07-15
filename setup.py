@@ -38,8 +38,12 @@ BASE_WHEEL_URL = "https://github.com/state-spaces/mamba/releases/download/{tag_n
 
 # FORCE_BUILD: Force a fresh build locally, instead of attempting to find prebuilt wheels
 # SKIP_CUDA_BUILD: Intended to allow CI to use a simple `python setup.py sdist` run to copy over raw files, without any cuda compilation
-FORCE_BUILD = os.getenv("MAMBA_FORCE_BUILD", "FALSE") == "FALSE"
-SKIP_CUDA_BUILD = os.getenv("MAMBA_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
+FORCE_BUILD = os.getenv("MAMBA_FORCE_BUILD", "FALSE") == "TRUE"
+SKIP_CUDA_BUILD = (
+    os.getenv("MAMBA_SKIP_CUDA_BUILD", "FALSE") == "TRUE"
+    or CUDA_HOME is None
+    or sys.platform == "win32"
+)
 # For CI, we want the option to build with C++11 ABI since the nvcr images use C++11 ABI
 FORCE_CXX11_ABI = os.getenv("MAMBA_FORCE_CXX11_ABI", "FALSE") == "TRUE"
 
@@ -248,29 +252,40 @@ setup(
     ),
     author="Tri Dao, Albert Gu",
     author_email="tri@tridao.me, agu@cs.cmu.edu",
-    description="Mamba state-space model",
+    description="MPC bidirectional spatial-modulated state-space model for LiDAR 3D pose measurement",
+    license="BSD-3-Clause",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/state-spaces/mamba",
+    url="https://github.com/Sevenforweb/MPC",
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: BSD License",
-        "Operating System :: Unix",
+        "Operating System :: OS Independent",
     ],
     ext_modules=ext_modules,
-    cmdclass={"bdist_wheel": CachedWheelsCommand, "build_ext": BuildExtension}
-    if ext_modules
-    else {
-        "bdist_wheel": CachedWheelsCommand,
-    },
+    cmdclass={"bdist_wheel": CachedWheelsCommand, "build_ext": BuildExtension} if ext_modules else {},
     python_requires=">=3.7",
     install_requires=[
         "torch",
         "packaging",
-        "ninja",
-        "einops",
-        "triton",
-        "transformers",
-        "causal_conv1d>=1.1.0",
     ],
+    extras_require={
+        "cuda": [
+            "ninja",
+            "einops",
+            "triton",
+            "causal_conv1d>=1.1.0",
+        ],
+        "language-model": [
+            "einops",
+            "transformers",
+        ],
+        "data": [
+            "numpy",
+            "scipy",
+            "smplx",
+            "plyfile",
+            "open3d",
+            "tqdm",
+        ],
+    },
 )

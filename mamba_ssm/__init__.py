@@ -1,5 +1,26 @@
-__version__ = "1.1.3"
+__version__ = "1.0.0"
 
-from mamba.mamba_ssm.ops.selective_scan_interface import selective_scan_fn, mamba_inner_fn
-from mamba.mamba_ssm.modules.mamba_simple import Mamba
-from mamba.mamba_ssm.models.mixer_seq_simple import MambaLMHeadModel
+selective_scan_fn = None
+mamba_inner_fn = None
+Mamba = None
+MambaLMHeadModel = None
+
+try:
+    from .ops.selective_scan_interface import mamba_inner_fn, selective_scan_fn
+    from .modules.mamba_simple import Mamba
+    from .models.mixer_seq_simple import MambaLMHeadModel
+except (ImportError, RuntimeError, OSError):
+    pass
+
+from .mpc import MPCConfig, MPCCalibrationLoss, MPCPoseModel, MPCPoseOutput
+
+__all__ = [
+    "MPCConfig",
+    "MPCCalibrationLoss",
+    "MPCPoseModel",
+    "MPCPoseOutput",
+    "Mamba",
+    "MambaLMHeadModel",
+    "mamba_inner_fn",
+    "selective_scan_fn",
+]
