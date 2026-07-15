@@ -43,6 +43,15 @@ class MPCPoseModelTest(unittest.TestCase):
         losses["loss"].backward()
         self.assertIsNotNone(model.heatmap_head.weight.grad)
 
+    def test_pretrain_loss_without_optional_supervision_has_gradient(self) -> None:
+        config = MPCConfig(num_joints=4, grid_size=4, d_model=16, d_state=3, depth=1, kde_sigma=0.75)
+        model = MPCPoseModel(config)
+        output = model(torch.rand(1, 16, 3) * 2.0 - 1.0)
+        criterion = MPCCalibrationLoss(model.coordinate_bins)
+        losses = criterion(output, torch.zeros(1, 4, 3), stage="pretrain")
+        losses["loss"].backward()
+        self.assertIsNotNone(model.heatmap_head.weight.grad)
+
 
 if __name__ == "__main__":
     unittest.main()

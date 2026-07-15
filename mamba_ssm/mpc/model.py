@@ -31,6 +31,7 @@ class MPCPoseOutput:
     correction: Tensor
     physical_context: Tensor
     point_foreground_logits: Tensor
+    point_mask: Tensor
     token_mask: Tensor
 
 
@@ -119,6 +120,7 @@ class MPCPoseModel(nn.Module):
             correction=correction,
             physical_context=recoupled.physical_context,
             point_foreground_logits=point_foreground_logits,
+            point_mask=point_mask,
             token_mask=serialized.token_mask,
         )
 

@@ -6,7 +6,7 @@ This repository implements the model-side pipeline described in the manuscript:
 
 The original repository snapshot contained upstream Mamba kernels, dataset adapters, configuration fragments, and an old `BiMamba` implementation only inside `build/`. It did not contain an executable implementation of the manuscript's probability-density serialization, spatially modulated SSM, physical-coordinate recoupling decoder, uncertainty output, or calibration losses. These modules are now available as a standalone PyTorch model under `mamba_ssm/mpc/`.
 
-This update intentionally focuses on the **algorithm/model layer**. LiDAR synchronization, sensor drivers, calibration rigs, distributed training infrastructure, and full physical deployment are outside the current scope.
+This update focuses on the **algorithm/model layer** and includes GPU training and inference entry points. LiDAR synchronization, sensor drivers, calibration rigs, and sensor-side physical deployment are outside the current scope.
 
 ## Implemented Paper Modules
 
@@ -45,7 +45,9 @@ MPC-main/
 |   `-- mpc-paper-model.py     # paper-aligned model and training reference
 |-- datasets/                  # legacy dataset adapters
 |-- examples/
-|   `-- run_mpc_model.py       # complete forward/loss/backward example
+|   |-- run_mpc_model.py       # complete forward/loss/backward example
+|   |-- train_mpc_gpu.py       # AMP, checkpoint, single-GPU and DDP training
+|   `-- infer_mpc_gpu.py       # checkpoint-based CUDA inference and export
 |-- tests/
 |   `-- test_mpc_model.py      # CPU unit tests
 `-- setup.py
@@ -73,6 +75,33 @@ python3 -m venv .venv
 .venv/bin/python -m pip install torch
 MAMBA_SKIP_CUDA_BUILD=TRUE .venv/bin/python -m pip install -e . --no-build-isolation
 ```
+
+### NVIDIA GPU installation
+
+Install a CUDA-enabled PyTorch wheel that matches the NVIDIA driver and the compute platform selected on the [official PyTorch installation page](https://pytorch.org/get-started/locally/). The following example uses the CUDA 11.8 wheel channel:
+
+Windows PowerShell:
+
+```powershell
+py -m venv .venv
+./.venv/Scripts/python.exe -m pip install --upgrade pip
+./.venv/Scripts/python.exe -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+$env:MAMBA_SKIP_CUDA_BUILD = "TRUE"
+./.venv/Scripts/python.exe -m pip install -e . --no-build-isolation
+./.venv/Scripts/python.exe -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+Linux:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+MAMBA_SKIP_CUDA_BUILD=TRUE .venv/bin/python -m pip install -e . --no-build-isolation
+.venv/bin/python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+```
+
+The paper-aligned MPC implementation under `mamba_ssm/mpc/` uses PyTorch tensor operations and runs directly on CUDA. Compiling the original selective-scan extension is optional.
 
 ### Optional original CUDA Mamba operators
 
@@ -239,6 +268,149 @@ for batch in train_loader:
 
 The manuscript reports a 30-epoch pre-calibration phase at `2e-4`, followed by 50 fine-tuning epochs with an initial learning rate of `2e-6` and batch size 32. These values are recorded in `configs/mpc-paper-model.py`; dataset-specific tuning is still required.
 
+## GPU Training and Deployment
+
+### Training tensor format
+
+`examples/train_mpc_gpu.py` accepts a `.pt` file containing a dictionary of batched tensors:
+
+```python
+import torch
+
+torch.save(
+    {
+        "points": points,                       # (samples, points, 3), float32
+        "point_mask": point_mask,               # (samples, points), bool
+        "keypoints_3d": keypoints_3d,           # (samples, joints, 3), float32
+        "point_foreground": point_foreground,   # optional (samples, points)
+    },
+    "data/mpc_train.pt",
+)
+```
+
+All point clouds in one tensor file must use the same padded point count. Set `point_mask=False` for padding. Points and target joints must use the same coordinate transformation and `coordinate_range`.
+
+### Single-GPU training
+
+The default command follows the manuscript schedule: 30 pretraining epochs followed by 50 fine-tuning epochs. FP16 automatic mixed precision is enabled by default.
+
+```bash
+python examples/train_mpc_gpu.py \
+  --data data/mpc_train.pt \
+  --output-dir work_dirs/mpc_v1 \
+  --epochs 80 \
+  --pretrain-epochs 30 \
+  --batch-size 32 \
+  --lr 2e-4 \
+  --finetune-lr 2e-6 \
+  --amp fp16
+```
+
+Use BF16 on GPUs with native BF16 support:
+
+```bash
+python examples/train_mpc_gpu.py --data data/mpc_train.pt --amp bf16
+```
+
+Use `--compile` to enable `torch.compile`:
+
+```bash
+python examples/train_mpc_gpu.py --data data/mpc_train.pt --compile
+```
+
+Checkpoints are written to the output directory as `epoch_XXX.pt` and `latest.pt`. Each checkpoint contains the model weights, optimizer, AMP scaler, completed epoch, and `MPCConfig`.
+
+### Multi-GPU DDP training
+
+Launch one process per GPU with `torchrun`. `DistributedDataParallel` uses the NCCL backend and automatically partitions the dataset with `DistributedSampler`.
+
+Single machine with four GPUs:
+
+```bash
+torchrun --standalone --nproc_per_node=4 examples/train_mpc_gpu.py \
+  --data data/mpc_train.pt \
+  --output-dir work_dirs/mpc_v1_ddp \
+  --batch-size 16 \
+  --workers 8 \
+  --amp fp16
+```
+
+`--batch-size` is the per-process batch size. The effective global batch size is:
+
+```text
+global_batch_size = batch_size_per_gpu * number_of_gpus
+```
+
+For multi-node execution, provide the standard `torchrun` rendezvous arguments to every node:
+
+```bash
+torchrun \
+  --nnodes=2 \
+  --nproc_per_node=4 \
+  --node_rank=0 \
+  --master_addr=10.0.0.1 \
+  --master_port=29500 \
+  examples/train_mpc_gpu.py --data data/mpc_train.pt --amp fp16
+```
+
+Change `--node_rank` on each node while keeping the same master address, port, and training arguments.
+
+### Resume training
+
+```bash
+python examples/train_mpc_gpu.py \
+  --data data/mpc_train.pt \
+  --resume work_dirs/mpc_v1/latest.pt \
+  --output-dir work_dirs/mpc_v1
+```
+
+For DDP, pass the same `--resume` path to all `torchrun` processes. Only rank zero writes checkpoints and progress logs.
+
+### GPU memory tuning
+
+- Reduce `--batch-size` first when memory is insufficient.
+- Reduce `--grid-size`; sequence length is `3 * grid_size^2`.
+- Reduce `--d-model`, `--d-state`, or `--depth` for smaller models.
+- Keep `--amp fp16` or `--amp bf16` enabled for mixed-precision training.
+- Increase `--workers` and keep pinned-memory transfers enabled when the GPU is waiting for input data.
+- Use one process per GPU for DDP instead of `DataParallel`.
+
+### CUDA inference deployment
+
+Prepare an input tensor file:
+
+```python
+import torch
+
+torch.save(
+    {
+        "points": points,            # (batch, points, 3) or (points, 3)
+        "point_mask": point_mask,    # optional
+    },
+    "data/mpc_input.pt",
+)
+```
+
+Run checkpoint-based GPU inference:
+
+```bash
+python examples/infer_mpc_gpu.py \
+  --checkpoint work_dirs/mpc_v1/latest.pt \
+  --input data/mpc_input.pt \
+  --output outputs/mpc_predictions.pt \
+  --amp fp16 \
+  --compile
+```
+
+The output file contains:
+
+- `coordinates`: reconstructed joint coordinates with shape `(batch, joints, 3)`.
+- `uncertainty`: per-joint, per-axis probability variance.
+- `correction`: geometric recoupling correction vectors.
+- `heatmap_probabilities`: X/Y/Z probability distributions.
+
+For a long-running inference service, initialize the model and load the checkpoint once, keep it in `eval()` mode on the GPU, use `torch.inference_mode()`, batch requests with the same padded point count, and transfer inputs with `non_blocking=True` from pinned host memory.
+
 ## Dataset Integration
 
 Legacy dataset files remain under `datasets/`, but the old repository did not include the external registry, runner, model heads, or `tools/train.py` referenced by the historical configs. Therefore, the old `*-finetune-MPC.py` files are retained as dataset/preprocessing references rather than advertised as directly executable training commands.
@@ -263,6 +435,13 @@ Run all model tests without CUDA:
 ```powershell
 $env:PYTHONPATH = (Get-Location).Path
 python -m unittest discover -s tests -v
+```
+
+Validate the GPU entry-point arguments:
+
+```bash
+python examples/train_mpc_gpu.py --help
+python examples/infer_mpc_gpu.py --help
 ```
 
 The tests cover:
