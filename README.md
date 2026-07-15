@@ -1,355 +1,310 @@
-Notice: The full usage method of this code repository will be edited and uploaded after acceptance.
-# Bidirectional Spatial-Modulated Mamba Network for LiDAR-based 3D Human Pose Estimation
+# MPC: LiDAR 3D Human Pose Measurement with Spatial-Modulated Bidirectional SSMs
 
-<div align="center">
+This repository implements the model-side pipeline described in the manuscript:
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-1.10+-red.svg)](https://pytorch.org/)
-[![License](https://img.shields.io/badge/License-BSD-green.svg)](LICENSE)
+> **Compensating Distance-Dependent Sparsity in LiDAR Human Pose Measurement via Bidirectional State Space Models**
 
-**Multi-Purpose Compact Mamba — A Multi-Task Point Cloud Perception Framework Based on State Space Models**
+The original repository snapshot contained upstream Mamba kernels, dataset adapters, configuration fragments, and an old `BiMamba` implementation only inside `build/`. It did not contain an executable implementation of the manuscript's probability-density serialization, spatially modulated SSM, physical-coordinate recoupling decoder, uncertainty output, or calibration losses. These modules are now available as a standalone PyTorch model under `mamba_ssm/mpc/`.
 
-</div>
+This update intentionally focuses on the **algorithm/model layer**. LiDAR synchronization, sensor drivers, calibration rigs, distributed training infrastructure, and full physical deployment are outside the current scope.
 
----
+## Implemented Paper Modules
 
-## Table of Contents
+| Manuscript capability | Repository implementation | Main behavior |
+| --- | --- | --- |
+| 3D probabilistic density construction | `DensityHilbertSerializer` | Trilinear point splatting followed by separable Gaussian KDE filtering |
+| Adaptive grid decoupling | `DensityHilbertSerializer._adaptive_projection_features` | Fuses fine and pooled density maps with a density-dependent gate |
+| Orthogonal feature decoupling | `DensityHilbertSerializer` | Builds XY, YZ, and ZX projected feature maps |
+| Hilbert space-filling serialization | `hilbert_indices` | Converts each 2D map into a locality-preserving 1D sequence |
+| Conditional position encoding | `ConditionalPositionEncoding` | Adds learned absolute/projection embeddings and depthwise `Conv1d` features |
+| Spatial-modulated SSM parameters | `SelectiveDiagonalSSM` | Conditions the SSM `B` and `C` parameters on a spatial saliency sequence |
+| Bidirectional skeletal filtering | `SpatialModulatedBiSSM` | Scans forward and backward, then applies gated feature fusion |
+| Density/physical-space recoupling | `SpatialRecouplingDecoder` | Reintroduces Hilbert-aligned raw LiDAR coordinates as physical anchors |
+| 1D probabilistic coordinate heatmaps | `MPCPoseModel.heatmap_head` | Predicts one distribution for each joint and each X/Y/Z axis |
+| Measurement uncertainty | `MPCPoseOutput.uncertainty` | Reports per-axis probability variance |
+| Geometric correction vector | `MPCPoseOutput.correction` | Applies uncertainty-gated residual coordinate calibration |
+| Two-stage calibration loss | `MPCCalibrationLoss` | Supports pretraining, fine-tuning, and combined supervision |
 
-- [Project Overview](#project-overview)
-- [Quick Start](#quick-start)
-- [Project Structure](#project-structure)
-- [Dataset Configuration](#dataset-configuration)
-- [Model Configuration](#model-configuration)
-- [Training and Inference](#training-and-inference)
-- [Core Algorithm](#core-algorithm)
-- [FAQ](#faq)
-- [Citation](#citation)
-- [License](#license)
+The model uses a pure PyTorch diagonal selective scan, so the paper pipeline runs on CPU or CUDA without compiling the optional upstream selective-scan extension.
 
----
+## Repository Layout
 
-## Project Overview
+```text
+MPC-main/
+|-- mamba_ssm/
+|   |-- mpc/
+|   |   |-- serialization.py   # KDE, adaptive projections, Hilbert ordering
+|   |   |-- ssm.py             # spatial-modulated forward/backward SSM
+|   |   |-- decoder.py         # physical-coordinate recoupling decoder
+|   |   |-- model.py           # end-to-end MPC pose model
+|   |   `-- losses.py          # Gaussian targets and calibration losses
+|   |-- modules/MPCmamba.py    # compatibility BiMamba entry point
+|   |-- ops/                    # optional original CUDA/Triton operators
+|   `-- models/                 # original generic Mamba language-model code
+|-- configs/
+|   `-- mpc-paper-model.py     # paper-aligned model and training reference
+|-- datasets/                  # legacy dataset adapters
+|-- examples/
+|   `-- run_mpc_model.py       # complete forward/loss/backward example
+|-- tests/
+|   `-- test_mpc_model.py      # CPU unit tests
+`-- setup.py
+```
 
-MPC-Mamba (Multi-Purpose Compact Mamba) is a multi-task point cloud perception framework based on the **Mamba State Space Model (SSM)**. Building upon the original Mamba SSM architecture, this project provides deep customization and optimization for **3D human pose estimation**, integrating point cloud Transformer backbones with selective scanning mechanisms to achieve efficient and accurate multi-modal perception.
+## Installation
 
-This framework supports 3D human pose estimation across multiple point cloud datasets, including indoor scenarios (SLOPER4D, Human3.6M) and outdoor autonomous driving scenarios (LiDARHuman26M, Waymo), providing a complete training pipeline from pretraining to fine-tuning.
+### CPU or model-only installation
 
----
+Install PyTorch for your platform first. The following Windows PowerShell example installs the CPU wheel:
 
-## Quick Start
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+$env:MAMBA_SKIP_CUDA_BUILD = "TRUE"
+.\.venv\Scripts\python.exe -m pip install -e . --no-build-isolation
+```
 
-### Environment Requirements
+Linux/macOS model-only installation:
 
 ```bash
-# Python >= 3.8
-# PyTorch >= 1.10
-# CUDA >= 11.6
-
-# Install PyTorch
-pip install torch==1.12.0+cu113 torchvision==0.13.0+cu113 torchaudio==0.12.0 --extra-index-url https://download.pytorch.org/whn/cu113
-
-# Install core dependencies
-pip install -e . --no-build-isolation
-
-# Additional dependencies: torch, packaging, ninja, einops, triton, transformers, causal_conv1d>=1.1.0
-pip install einops triton transformers smplx plyfile numpy scipy open3d tqdm cupy
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install torch
+MAMBA_SKIP_CUDA_BUILD=TRUE .venv/bin/python -m pip install -e . --no-build-isolation
 ```
 
-### Installation from Source
+### Optional original CUDA Mamba operators
+
+The new MPC model does not require the custom kernels. On a supported Linux CUDA development environment, install optional packages and force a source build only if you need the original upstream Mamba modules:
 
 ```bash
-git clone https://github.com/your-repo/MPC-Mamba.git
-cd MPC-Mamba
-
-# Automatically compile CUDA operators (requires CUDA Toolkit)
-pip install -e . --no-build-isolation
-
-# To skip CUDA compilation and use pre-built wheels
-export MAMBA_SKIP_CUDA_BUILD=TRUE
-pip install -e . --no-build-isolation
+.venv/bin/python -m pip install -e ".[cuda]" --no-build-isolation
+MAMBA_FORCE_BUILD=TRUE .venv/bin/python -m pip install -e . --no-build-isolation
 ```
 
----
+Windows automatically uses the pure PyTorch path because the bundled CUDA build scripts target Unix-like CUDA toolchains.
 
-## Project Structure
-
-```
-MPC-Mamba/
-├── mamba_ssm/                  # Mamba SSM core modules
-│   ├── modules/                # Mamba Block definitions
-│   │   ├── mamba_simple.py     # Standard Mamba
-│   │   ├── mamba2_simple.py    # Mamba-2 (HMSS)
-│   │   └── bimamba2.py         # Bidirectional Mamba
-│   ├── ops/                    # CUDA operators
-│   │   ├── triton/             # Triton implementations
-│   │   │   ├── selective_state_update.py   # State update
-│   │   │   ├── ssd_combined.py             # Combined scan
-│   │   │   └── layernorm.py                # RMSNorm
-│   │   └── selective_scan_interface.py      # Selective scan
-│   ├── models/                 # Pretrained language models
-│   │   └── mixer_seq_simple.py
-│   └── utils/                  # Utility functions
-│
-├── datasets/                   # Dataset interfaces
-│   ├── sloper4d_dataset.py    # SLOPER4D dataset
-│   ├── lidarh26m_dataset.py    # LiDARHuman26M dataset
-│   ├── humanm3_dataset.py      # Human3.6M dataset
-│   └── transforms.py           # Data augmentation and preprocessing
-│
-├── configs/                    # Configuration files
-│   ├── synpretrain-MPC.py     # Self-supervised pretraining config
-│   ├── sloper4d-finetune-MPC.py   # SLOPER4D fine-tuning
-│   ├── lidarh26m-finetune-MPC.py  # LiDARHuman26M fine-tuning
-│   └── base_smpl_subset.py     # SMPL skeleton configuration
-│
-├── csrc/                       # CUDA/C++ source code
-│   └── selective_scan/         # Selective scan CUDA implementation
-│
-├── causal-conv1d/              # Causal convolution operators
-│
-├── benchmarks/                 # Performance benchmarking
-│   └── benchmark_generation_mamba_simple.py
-│
-├── evals/                      # Evaluation scripts
-│   └── lm_harness_eval.py      # Language model evaluation
-│
-├── setup.py                    # Installation configuration
-└── README.md                   # This file
-```
-
----
-
-## Dataset Configuration
-
-### Supported Datasets
-
-| Dataset | Scenario | Modality | Description |
-|---------|----------|----------|-------------|
-| **SLOPER4D** | Indoor Multi-view | LiDAR + 4 Cameras | Natural human motion |
-| **LiDARHuman26M** | Outdoor Large-scale | LiDAR + SMPL | 26M point cloud frames, diverse scenarios |
-| **Human3.6M** | Indoor Single-view | Multi-View Cameras | Precise 3D annotations, gold standard |
-| **Waymo Open** | Outdoor Autonomous Driving | LiDAR + Camera | Large-scale outdoor point clouds |
-
-### SMPL Skeleton Configuration
-
-This framework uses the SMPL (Skinned Multi-Person Linear) model as the human body representation, defining a hierarchical skeleton with 24 joints:
+## Quick Inference
 
 ```python
-skeleton = [
-    "pelvis",       # 0  (root node)
-    "left_hip",     # 1
-    "right_hip",    # 2
-    "spine1",       # 3
-    "left_knee",    # 4
-    "right_knee",   # 5
-    "spine2",       # 6
-    "left_ankle",   # 7
-    "right_ankle",  # 8
-    "spine3",       # 9
-    # ... more joints
-]
+import torch
 
-# Common 15-joint subset (for evaluation)
-keypoint_range = [0, 1, 2, 4, 5, 7, 8, 12, 15, 16, 17, 18, 19, 20, 21]
-```
+from mamba_ssm import MPCConfig, MPCPoseModel
 
-### Data Preprocessing
-
-1. **Download datasets** and place them in the specified paths
-2. **Generate cache files**: `.pkl` caches are automatically generated on first load
-3. **Download SMPL model**: Place SMPL model files (`SMPL_python_v1.1.0.zip`) in the `smpl_models/` directory
-
-```bash
-# Example: SLOPER4D dataset structure
-datasets/sloper4d/
-├── subject_001/
-│   ├── labels.pkl
-│   ├── camera_0/
-│   └── lidar/
-└── ...
-```
-
----
-
-## Model Configuration
-
-### Backbone Configuration
-
-```python
-backbone = dict(
-    type='MPC-BACKBONE',          # Alternative: PT-v3m1-dapt
-    num_keypoints=15,             # Number of keypoints
-    in_channels=3,                # XYZ coordinates
-    order=["z", "z-trans", "hilbert", "hilbert-trans"],
-    stride=(2, 2, 2, 2),
-    enc_depths=(2, 2, 2, 6, 2),      # Encoder stage depths
-    enc_channels=(32, 64, 128, 256, 512),
-    dec_depths=(2, 2, 2, 2),          # Decoder stage depths
-    dec_channels=(128, 128, 128, 256),
-    mlp_ratio=4,
-    drop_path=0.3,
-    enable_flash=True,            # Enable Flash Attention
+config = MPCConfig(
+    num_joints=15,
+    grid_size=16,
+    coordinate_range=((-1.0, 1.0), (-1.0, 1.0), (-1.0, 1.0)),
+    d_model=96,
+    d_state=8,
+    depth=4,
 )
+model = MPCPoseModel(config)
+
+points = torch.rand(2, 1024, 3) * 2.0 - 1.0
+point_mask = torch.ones(2, 1024, dtype=torch.bool)
+output = model(points, point_mask)
+
+print(output.coordinates.shape)            # (2, 15, 3)
+print(output.heatmap_probabilities.shape)  # (2, 15, 3, 16)
+print(output.uncertainty.shape)            # (2, 15, 3)
+print(output.correction.shape)             # (2, 15, 3)
 ```
 
-### Mamba SSM Configuration
+Run the complete example:
+
+```powershell
+$env:PYTHONPATH = (Get-Location).Path
+python examplesun_mpc_model.py
+```
+
+## Input and Coordinate Contract
+
+`MPCPoseModel.forward(points, point_mask)` expects:
+
+- `points`: floating-point tensor with shape `(batch, num_points, 3)`.
+- `point_mask`: optional Boolean tensor with shape `(batch, num_points)` for padded point clouds.
+- Coordinates must use the same physical frame and numerical range specified by `MPCConfig.coordinate_range`.
+- The default range is `[-1, 1]` on all axes, matching the centered legacy preprocessing configurations.
+- For metric coordinates, set the range to the actual calibrated measurement volume, for example `((-2, 2), (-2, 2), (-1, 3))` in meters.
+- Points outside the configured volume are excluded from density construction and physical-anchor recoupling.
+
+`grid_size` must be a power of two because the serializer uses a Hilbert curve. The sequence length is `3 * grid_size^2`. Start with `8` or `16` for debugging; use a larger grid only after measuring memory and runtime on the target dataset.
+
+## Model Pipeline
+
+### 1. Probability-density reconstruction
+
+Raw points are splatted into a 3D grid with trilinear weights and filtered with a separable Gaussian kernel. This is a differentiable grid approximation of the manuscript's KDE representation. The resulting density encodes sparse-region ambiguity instead of forcing immediate deterministic coordinate regression.
+
+### 2. Adaptive orthogonal projections
+
+The volume is projected into XY, YZ, and ZX maps. Each map combines:
+
+- Fine-grid density.
+- Pooled coarse-grid density.
+- A local density gate that favors fine features in dense cells and coarse context in sparse cells.
+
+Point features and authentic coordinates are accumulated into the same projected cells.
+
+### 3. Hilbert serialization and CPE
+
+Each projected map is traversed with the same Hilbert order. Point features, density features, masks, and physical anchors therefore remain synchronized. Conditional position encoding implements the manuscript relation conceptually as:
+
+```text
+S_pos = learned_position(S) + depthwise_conv1d(S) + S
+```
+
+### 4. Spatial-modulated bidirectional SSM
+
+The local saliency sequence follows the manuscript mechanism:
+
+```text
+S_spatial = sigmoid(Conv1d(S)) * S + Conv1d(S)
+```
+
+`S_spatial` modulates the time-varying `B` and `C` parameters of the selective diagonal SSM. Independent forward and reversed scans are normalized, gated by the input sequence, and fused. The scan cost is linear in sequence length.
+
+### 5. Physical-space recoupling decoder
+
+The decoder embeds the Hilbert-aligned authentic coordinates and fuses them with the filtered sequence. It uses:
+
+- Linear self-attention for sequence conditioning.
+- Channel attention from learned joint queries to filtered features.
+- Spatial attention from joint queries to physical coordinate embeddings.
+- A physical context vector and bounded correction vector for each joint.
+
+This implements the manuscript's geometric feedback idea without requiring sensor-side deployment code.
+
+### 6. Probabilistic coordinate decoding
+
+The head predicts three 1D distributions per joint. The default differentiable coordinate is the soft expectation. `model.decode_argmax(...)` is available for manuscript-style peak decoding. Per-axis variance is returned as an uncertainty estimate.
+
+## Training Losses
 
 ```python
-# Mamba Selective Scan Parameters
-ssm_cfg = dict(
-    d_state=16,          # SSM state dimension
-    d_conv=4,            # Causal convolution kernel size
-    expand=2,            # Internal dimension expansion factor
-    dt_rank="auto",      # Delta projection rank
-    dt_min=0.001,
-    dt_max=0.1,
+from mamba_ssm import MPCCalibrationLoss
+
+criterion = MPCCalibrationLoss(
+    model.coordinate_bins,
+    skeleton_edges=((0, 1), (1, 2), (2, 3)),
+    heatmap_sigma=0.04,
 )
+
+output = model(points, point_mask)
+losses = criterion(
+    output,
+    target_joints,
+    point_foreground=foreground_labels,
+    stage="joint",
+)
+losses["loss"].backward()
 ```
 
-### Training Hyperparameters
+Available stages:
+
+- `pretrain`: skeletal connectivity loss plus optional point foreground/clutter loss, corresponding to `L_pre = delta_j L_j + delta_p L_p`.
+- `finetune`: axis heatmap KL divergence, coordinate regression stabilization, and correction regularization.
+- `joint`: sum of pretraining and fine-tuning objectives for end-to-end experiments.
+
+The KL term supervises Gaussian axis distributions generated around the ground-truth joints. The coordinate term stabilizes soft-expectation decoding; it can be assigned zero weight for a stricter heatmap-only reproduction.
+
+## Minimal Training Skeleton
 
 ```python
-optimizer = dict(type="AdamW", lr=3e-4, weight_decay=0.005)
-scheduler = dict(
-    type="OneCycleLR",
-    max_lr=3e-4,
-    pct_start=0.04,       # 4% warmup
-    anneal_strategy="cos"
-)
-num_epochs = 50
+import torch
+
+from mamba_ssm import MPCConfig, MPCCalibrationLoss, MPCPoseModel
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = MPCPoseModel(MPCConfig(num_joints=15)).to(device)
+criterion = MPCCalibrationLoss(model.coordinate_bins).to(device)
+optimizer = torch.optim.AdamW(model.parameters(), lr=2e-4, weight_decay=0.005)
+
+for batch in train_loader:
+    points = batch["points"].to(device)
+    point_mask = batch["point_mask"].to(device)
+    target_joints = batch["keypoints_3d"].to(device)
+    foreground = batch.get("point_foreground")
+    if foreground is not None:
+        foreground = foreground.to(device)
+
+    output = model(points, point_mask)
+    losses = criterion(output, target_joints, foreground, stage="joint")
+    optimizer.zero_grad(set_to_none=True)
+    losses["loss"].backward()
+    optimizer.step()
 ```
 
----
+The manuscript reports a 30-epoch pre-calibration phase at `2e-4`, followed by 50 fine-tuning epochs with an initial learning rate of `2e-6` and batch size 32. These values are recorded in `configs/mpc-paper-model.py`; dataset-specific tuning is still required.
 
-## Training and Inference
+## Dataset Integration
 
-### Self-Supervised Pretraining
+Legacy dataset files remain under `datasets/`, but the old repository did not include the external registry, runner, model heads, or `tools/train.py` referenced by the historical configs. Therefore, the old `*-finetune-MPC.py` files are retained as dataset/preprocessing references rather than advertised as directly executable training commands.
 
-Pretraining using point cloud reconstruction and contrastive learning:
-
-```bash
-python tools/train.py configs/synpretrain-MPC.py
-```
-
-Pretraining tasks include:
-- **Ray Casting Scene**: Generate simulated 3D scenes
-- **Noise Points Generation**: Increase data diversity
-- **Body Part Removal**: Self-supervised learning
-
-### Downstream Task Fine-tuning
-
-```bash
-# SLOPER4D human pose estimation
-python tools/train.py configs/sloper4d-finetune-MPC.py
-
-# LiDARHuman26M human pose estimation
-python tools/train.py configs/lidarh26m-finetune-MPC.py
-```
-
-### Model Evaluation
-
-```bash
-python tools/test.py configs/sloper4d-finetune-MPC.py \
-    --checkpoint work_dir/sloper4d-finetune-MPC/best.pth
-```
-
-### Benchmarking
-
-```bash
-# Mamba generation speed benchmark
-python benchmarks/benchmark_generation_mamba_simple.py \
-    --model-name state-spaces/mamba-130m \
-    --promptlen 100 --genlen 100
-```
-
----
-
-## Core Algorithm
-
-### Selective State Scan
-
-The core innovation of Mamba is the introduction of input-dependent parameter selection mechanism:
-
-```
-Standard SSM:     y = SSM(x)           # Parameters independent of input
-Mamba SSM:   y = SSM(x; θ(x))       # Parameters determined by input
-
-Δ = B·x → A = A·σ(x) → C = C·x
-h' = Ah + B·x
-y = Ch
-```
-
-The `dt_rank` controls the projection dimension, enabling content-aware selective scanning while maintaining efficiency.
-
-### Continuity Coordinates
-
-For 3D human pose estimation, this framework adopts a continuity coordinate classification method:
-
-```
-Traditional: argmax(heatmap) → Continualize → Fine localization
-CC Method:   Classify coarse coords + Regression fine offset → End-to-end
-
-coord_cls = softmax(class_logits)       # Coarse localization
-coord_offset = tanh(offset_logits)      # Fine offset
-final_coord = (coord_cls + coord_offset) / grid_size
-```
-
----
-
-## FAQ
-
-### Q1: CUDA operator compilation fails, what should I do?
-
-```bash
-# Use pre-built wheel installation (recommended)
-export MAMBA_SKIP_CUDA_BUILD=TRUE
-pip install -e .
-
-# Or use CPU-only version for development testing
-```
-
-### Q2: How to switch to a different backbone?
-
-Edit the `backbone.type` field in `configs/xxx-finetune-MPC.py`:
+Adapt each sample to this minimal dictionary:
 
 ```python
-backbone = dict(
-    type='PT-v3m1-dapt',  # Replace with your backbone
-    # ...
-)
-```
-
-### Q3: Does it support multi-GPU training?
-
-Yes. Using PyTorch Distributed Data Parallel (DDP):
-
-```bash
-python -m torch.distributed.launch \
-    --nproc_per_node=4 tools/train.py configs/synpretrain-MPC.py
-```
-
----
-
-## Citation
-
-If you use this project in your research, please cite:
-
-```bibtex
-@article{mpcmamba2024,
-  title={MPC-Mamba: Multi-Purpose Compact Mamba for 3D Human Pose Estimation},
-  author={Your Name},
-  year={2024}
+sample = {
+    "points": points_float_tensor,          # (N, 3)
+    "point_mask": valid_point_mask,         # (N,)
+    "keypoints_3d": joints_float_tensor,    # (J, 3)
+    "point_foreground": foreground_labels, # optional (N,)
 }
 ```
 
-We also gratefully acknowledge contributions from the following open-source projects:
+For variable-length clouds, pad points in the collate function and set `point_mask=False` for padded rows. Apply the same centering/scaling transform to points and target joints, and set `coordinate_range` to the transformed measurement volume.
 
-- [Mamba](https://github.com/state-spaces/mamba) — Albert Gu & Tri Dao
-- [Pointcept](https://github.com/pointpats/pointcept) — Point Cloud Transformers
-- [SMPL-X](https://smpl-x.is.tue.mpg.de/) — Max Planck Institute
+## Verification
 
----
+Run all model tests without CUDA:
+
+```powershell
+$env:PYTHONPATH = (Get-Location).Path
+python -m unittest discover -s tests -v
+```
+
+The tests cover:
+
+- Hilbert order validity.
+- Density serialization shapes and aligned masks/anchors.
+- End-to-end pose, heatmap, and uncertainty output shapes.
+- Probability normalization.
+- Combined calibration loss.
+- Full backward propagation through the model.
+
+## Compatibility
+
+Historical code importing the old module can continue to use:
+
+```python
+from mamba_ssm.modules.MPCmamba import BiMamba
+```
+
+The compatibility class now delegates to the spatial-modulated bidirectional SSM instead of the old unavailable external package import.
+
+## Current Boundaries
+
+- The repository now provides a complete paper-aligned model path, not a reproduction of the authors' unavailable private training framework.
+- Dataset files require local dataset paths and may require adaptation to their latest released schemas.
+- Reported manuscript metrics are not claimed until the model is trained with the stated datasets, splits, calibration, and evaluation protocol.
+- The pure PyTorch selective scan prioritizes portability and correctness. A fused CUDA kernel can replace `SelectiveDiagonalSSM` later without changing the public model interface.
+- Physical LiDAR acquisition, timestamp synchronization, extrinsic calibration, and deployment optimization are intentionally excluded.
+
+## Citation
+
+Use the final publisher-provided citation after acceptance. For the current manuscript draft:
+
+```bibtex
+@article{duan2026mpc,
+  title={Compensating Distance-Dependent Sparsity in LiDAR Human Pose Measurement via Bidirectional State Space Models},
+  author={Duan, Shiwei and Wang, Haozhe and Li, Weibin and Xue, Bohuan and Fan, Rui and Tang, Xiaoyu},
+  year={2026},
+  note={Manuscript under review}
+}
+```
 
 ## License
 
-This project is open-source under the [BSD-3-Clause License](LICENSE).
+This repository is distributed under the BSD 3-Clause License. See `LICENSE`.

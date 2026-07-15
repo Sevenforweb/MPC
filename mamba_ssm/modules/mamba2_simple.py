@@ -11,12 +11,12 @@ except ImportError:
     causal_conv1d_fn = None
 
 try:
-    from mamba.mamba_ssm.ops.triton.layernorm_gated import RMSNorm as RMSNormGated
+    from mamba_ssm.ops.triton.layernorm_gated import RMSNorm as RMSNormGated
 except ImportError:
     RMSNormGated, LayerNorm = None, None
 
-from mamba.mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
-from mamba.mamba_ssm.ops.triton.ssd_combined import mamba_split_conv1d_scan_combined
+from mamba_ssm.ops.triton.ssd_combined import mamba_chunk_scan_combined
+from mamba_ssm.ops.triton.ssd_combined import mamba_split_conv1d_scan_combined
 
 
 class MPCMamba2Simple(nn.Module):
