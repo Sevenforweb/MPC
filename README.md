@@ -1,13 +1,5 @@
 # Progressive Joint-Heatmap Refinement for LiDAR Human Pose Estimation
 
-This repository implements the model-side pipeline described in the manuscript:
-
-> **Progressive Joint-Heatmap Refinement for LiDAR Human Pose Estimation**
-
-The original repository snapshot contained upstream Mamba kernels, dataset adapters, configuration fragments, and an old `BiMamba` implementation only inside `build/`. It did not contain an executable implementation of the manuscript's probability-density serialization, spatially modulated SSM, physical-coordinate recoupling decoder, uncertainty output, or calibration losses. These modules are now available as a standalone PyTorch model under `mamba_ssm/mpc/`.
-
-This update focuses on the **algorithm/model layer** and includes GPU training and inference entry points. LiDAR synchronization, sensor drivers, calibration rigs, and sensor-side physical deployment are outside the current scope.
-
 ## Implemented Paper Modules
 
 | Manuscript capability | Repository implementation | Main behavior |
