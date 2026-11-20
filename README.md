@@ -461,6 +461,8 @@ The compatibility class now delegates to the spatial-modulated bidirectional SSM
 
 - This repository does not include code for LiDAR data acquisition, timestamp synchronization, extrinsic calibration, or deployment optimization.
 
+- If you encounter issues during reproduction, such as runtime errors or low model accuracy caused by mismatched key hyperparameters, please contact the author via email: duiduidui910@gmail.com
+
 ## Citation
 
 Use the final publisher-provided citation after acceptance. For the current manuscript draft:
