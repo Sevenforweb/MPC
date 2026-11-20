@@ -457,11 +457,9 @@ The compatibility class now delegates to the spatial-modulated bidirectional SSM
 
 ## Current Boundaries
 
-- The repository now provides a complete paper-aligned model path, not a reproduction of the authors' unavailable private training framework.
-- Dataset files require local dataset paths and may require adaptation to their latest released schemas.
-- Reported manuscript metrics are not claimed until the model is trained with the stated datasets, splits, calibration, and evaluation protocol.
-- The pure PyTorch selective scan prioritizes portability and correctness. A fused CUDA kernel can replace `SelectiveDiagonalSSM` later without changing the public model interface.
-- Physical LiDAR acquisition, timestamp synchronization, extrinsic calibration, and deployment optimization are intentionally excluded.
+- This code repository only provides implementation code for self-directed model reproduction and training. The metrics reported in the paper can only be reproduced when the model is trained strictly following the dataset, data split, calibration pipeline and evaluation protocol specified in the manuscript.
+
+- This repository does not include code for LiDAR data acquisition, timestamp synchronization, extrinsic calibration, or deployment optimization.
 
 ## Citation
 
